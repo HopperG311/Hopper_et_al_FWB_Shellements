@@ -1,10 +1,10 @@
 
 
-----------------------------------------------------------------------------------------------------------------------------------------
+#----------------------------------------------------------------------------------------------------------------------------------------
 #project:Shell micronutrient project 
 #coder:G.W. Hopper
-----------------------------------------------------------------------------------------------------------------------------------------
-
+#----------------------------------------------------------------------------------------------------------------------------------------
+rm(list = ls())
 ######################## 
 ######Step 1.##########
 #######################
@@ -13,8 +13,9 @@
 setwd("~/Shell/Micronutrients")
 micronutr<-read.csv(file="ShellMicronutrientsMass.csv", header = TRUE, sep = ",", row.names = c())
 head(micronutr)
-
+micronutr<-subset(micronutr, ID !="Fcer6" & ID !="Ouni1" & ID != "Ouni6" & ID != "Tver3" & ID != "Tver4")#no data for these individuals
 #create a factor for species names, use attach to call by name
+
 micronutr$Spp<-factor(micronutr$Spp, levels=c("A.plicata","C.asperata", "T.verrucosa","F.cerina", "P.decisum", "L.ornata", "O.unicolor",  order=TRUE))
 micronutr$Strategy<-factor(micronutr$Strategy, levels=c("Equilibrium","Periodic",  order=TRUE))
 micronutr$Shell<-factor(micronutr$Shell, levels=c("UD","General", "Unsculp", order=TRUE))
@@ -28,85 +29,172 @@ library(ggpubr)
 library(ggfortify)
 library(factoextra)
 library(dplyr)
-
-#creat a data frame of micronutrients
-Micros<-(as.data.frame(micronutr[c(6:15)]))
+library(MVN)#for multivariate normatlity tests
+library(car)
+library(tidyverse)
+library(dunn.test)
+#============================================
+#is length(age) related to nutrients?
+#create a data frame of micronutrients
+Micros<-(as.data.frame(micronutr[10:20]))
 attach(Micros)
+
 #Run principle components analysis
 micro.pca<-prcomp(na.omit(log(Micros)), scale =TRUE)
 ordiplot(micro.pca)
+
 #check eigen values with scree plot
 fviz_eig(micro.pca)
 eig.val <- get_eigenvalue(micro.pca)
 eig.val
-screeplot(micro.pca, bstick = FALSE, type = c("barplot", "lines"),
-          npcs = min(10, length(micro.pca$sdev)),
+
+screeplot(micro.pca, bstick = TRUE, type = c("barplot", "lines"),
+          npcs = min(11, length(micro.pca$sdev)),
           ptype = "o", bst.col = "red", bst.lty = "solid",
           xlab = "Component", ylab = "Inertia",
-          main = deparse(substitute(micro.pca)), legend = bstick)
+          main = deparse(substitute(micro.pca)))
 
+#Extract loadings for supplemental table and determine order for ilrs
 pca.loadings <- micro.pca$rotation
 pca.loadings
 #extract PCA scores for axis 1, 2, 3
+micronutr$pca.scores <- micro.pca$x[,1:3]
 
 
 #need to do this again because more column headers have been added at this point.
 attach(micronutr)
 head(micronutr)
-#instale national parks palettes to make graph pretty as NP
+
+#install national parks palettes to make graph pretty as NP
 #devtools::install_github("katiejolly/nationalparkcolors")
 library(nationalparkcolors)
 RWpal<-park_palette("Redwoods")
-Evpal<-park_palette("Everglades", 4)
+Evpal<-park_palette("Everglades",4)
 
 pal<-c(RWpal,Evpal) #colorpaletts
 
-
 #simple ordinatioN
-Microplot<- autoplot(micro.pca, data = micronutr, fill = 'Spp', shape = 21, size = 6,
+Microplot<- autoplot(micro.pca, x = 1, y = 2, data = micronutr, fill = 'Spp', shape = 'Spp', size = 5,
          loadings = TRUE, loadings.colour = 'grey45', loadings.label = TRUE, loadings.label.size = 7, 
          loadings.label.colour = 'black',loadings.label.hjust = 1.2, loadings.labels.vjust=1)+
-  stat_conf_ellipse(aes(color = Spp, fill = Spp), alpha = 0.07, size =.0, geom = "polygon")+
+  stat_conf_ellipse(aes(color = Spp, fill = Spp, linetype = Spp), alpha = 0.05, size =1.5, geom = "polygon")+
   geom_hline(aes(yintercept=0), linetype="dashed", size=1)+
   geom_vline(aes(xintercept=0), linetype="dashed", size=1)+
+  scale_linetype_manual(values =c(1,1,1,1,1,3,3))+
   scale_color_manual(values = pal)+
   scale_fill_manual(values = pal)+
-  theme(legend.position = c(.01,.15), legend.title = element_blank(), legend.text = element_text(face = "italic"), 
-        legend.background = element_rect(linetype = 2, color="black", fill = "grey94"),
-        panel.background = element_rect(fill="grey94"));Microplot
+  scale_shape_manual(values = c(21,22,23,24,25,21,22))+
+  theme(legend.position = c(.01,.85), 
+        legend.title = element_blank(), 
+        legend.text = element_text(face = "italic"), 
+        legend.key.size =  unit(.25, 'cm'),
+        legend.background = element_rect(linetype = 2, color="black", fill = "grey97"),
+        panel.background = element_rect(fill="grey90"));Microplot
 #adjustments to loading vectors
 Microplot$layers[[2]]$aes_params$size <- 1
 Microplot$layers[[2]]$geom_params$arrow$length <- unit(0, units = "points")
 Microplot
 
-ggsave("ShellMicrochemPCA.tiff", Microplot, width=8, height= 8, units = "in", dpi =300)
 
+
+#check data for assumptions of multivariation normality and heterogeneity
+#prior to MANOVA
+#=============================================================================
+#check Mardia's test and plot chi- squared quantiles vs observed
+mardia_result <- mvn(data = log10(Micros), mvnTest = "mardia", multivariatePlot = "qq")
+mardia_result$multivariateNormality
+
+#PERMANOVA esting for species differences
+set.seed(1)
+as.matrix(Micros)
+adonis(Micros~Spp*Length, data=micronutr, permutations = 999, method = "bray",
+       strata = NULL, contr.unordered= "contr.sum",
+       contr.ordered = "contr.poly")
+#BC distance matrix prep step to test for dispersion among species
+bc_micros<-vegdist(Micros, method = "bray")
+#test for dispersion among groups
+disper_micros_spp<-betadisper(bc_micros, Spp, type = "centroid")
+anova(disper_micros_spp)
+
+#PERMANOVA morphology differences
+set.seed(1)
+adonis(Micros~Shell*Length, data=micronutr, permutations = 999, method = "bray",
+       strata = NULL, contr.unordered= "contr.sum",
+       contr.ordered = "contr.poly")
+#BC distance matrix prep step to test for dispersion among morphologies
+bc_micros<-vegdist(Micros, method = "bray")
+#test for dispersion among groups
+disper_micros_shell<-betadisper(bc_micros, Shell, type = "centroid")
+anova(disper_micros_shell)
+
+#PERMANOVA strategies differences
+set.seed(1)
+adonis(Micros~Strategy*Length, data=micronutr, permutations = 999, method = "bray",
+       strata = NULL, contr.unordered= "contr.sum",
+       contr.ordered = "contr.poly")
+
+#BC distance matrix prep step to test for dispersion among stratetgies
+bc_micros<-vegdist(Micros, method = "bray")
+#test for dispersion among groups
+disper_micros_strategy<-betadisper(bc_micros, Strategy, type = "centroid")
+anova(disper_micros_strategy)
 
 #run a multivariate analysis of variance for 10 elements testing for species effects
-elem.man <- manova(cbind(C,N,P, K, B, Zn, Fe, Cu, Ca, Mn) ~ Spp, data = micronutr)
+elem.man <- manova(log(cbind(C,N,P, K, B, Zn, Fe, Cu, Ca, Mn, Mg)) ~ Spp, data = micronutr)
+summary(elem.man, test = "Wilks", tol = 0)
 summary.aov(elem.man)
-p.adjust(method ="hochberg")
 
-#Load tidyr to use gather.
+#run a multivariate analysis of variance for 10 elements testing for morphological effects
+elem.morph<- manova(log(cbind(C,N,P, K, B, Zn, Fe, Cu, Ca, Mn, Mg)) ~ Shell, data = micronutr)
+summary(elem.morph, test = "Wilks", tol = 0)
+summary.aov(elem.morph)
+#run a multivariate analysis of variance for 10 elements testing for life history effects
+elem.LH<- manova(log(cbind(C,N,P, K, B, Zn, Fe, Cu, Ca, Mn, Mg)) ~ Strategy, data = micronutr)
+summary(elem.LH, test = "Wilks", tol = 0)
+summary.aov(elem.LH)
+library(emmeans)
+attach(micronutr)
+#perform univariate tests of normality and hetergeneity; run anova, and pairwises test for species
+shapiro.test(log(C))#need to exchange elements for each test
+leveneTest(log(C)~Spp)
+lmC<-lm(log(C)~Spp, data= micronutr)
+emmeans(lmC, list(pairwise~Spp), adjust = "Tukey")
+#non-parametric; Kruskal-Wallis test among species
+dunn.test(C, Spp, method="bonferroni", kw = TRUE)
+dunn.test(Cu, Spp, method="bonferroni", kw = TRUE)
+dunn.test(N, Spp, method="bonferroni", kw = TRUE)
+dunn.test(P, Spp, method="bonferroni", kw = TRUE)
+#non-parametric; Kruskal-Wallis test among morphology
+dunn.test(B, Shell, method="bonferroni", kw = TRUE)
+dunn.test(C, Shell, method="bonferroni", kw = TRUE)
+dunn.test(Cu, Shell, method="bonferroni", kw = TRUE)
+dunn.test(N, Shell, method="bonferroni", kw = TRUE)
+dunn.test(P, Shell, method="bonferroni", kw = TRUE)
+#non-parametric; Kruskal-Wallis test among LH strategies
+dunn.test(B, Strategy, method="bonferroni", kw = TRUE)
+dunn.test(C, Strategy, method="bonferroni", kw = TRUE)
+dunn.test(Cu, Strategy, method="bonferroni", kw = TRUE)
+dunn.test(N, Strategy, method="bonferroni", kw = TRUE)
+dunn.test(P, Strategy, method="bonferroni", kw = TRUE)
+#
+
 library(tidyr)
-
-
-micro_long <- gather(micronutr, Element, Mass, B:Zn, factor_key=TRUE)
-micro_long
+Bulk_long <- gather(micronutr, Element, Mass, C:K, factor_key=TRUE)
+Bulk_long
 #create box plot for all elements
-elem.plot<-ggplot()+
-  geom_boxplot(data = micro_long, aes(x=Spp, y =Mass, fill = Tribe), width = .5, size = 1)+
-  facet_wrap(~Element, ncol =2, nrow = 5, strip.position = "right", scales = "free_y")+
+elem.bulk<-ggplot()+
+  geom_boxplot(data = Bulk_long, aes(x=Spp, y =Mass, fill = Tribe), width = .5, size = 1)+
+  facet_wrap(~Element, ncol =1, nrow = 5, strip.position = "right", scales = "free_y")+
   ylab(expression(Element~(mg~g^{"-1"})))+
   scale_fill_manual(values =Evpal)+
- 
+  ggtitle("Bulk elements")+
   theme_bw()+
-  theme(legend.position = "bottom", axis.title.x = element_blank(),
+  theme(legend.position = "bottom", axis.title.x = element_blank(), 
         axis.text.y = element_text(size = 11, margin=margin(t=-10)),
-        axis.text.x = element_text(face = "italic", size = 14, angle = 45, hjust =.75, vjust = .75),
+        axis.text.x = element_text(face = "italic", size = 12, angle = 45, hjust =.75, vjust = .75),
         panel.grid = element_line(color = "grey81"), panel.spacing = unit(.75, "lines"))
-elem.plot1<-elem.plot+
-  geom_point(data = micro_long %>% 
+elem.bulk1<-elem.bulk+
+  geom_point(data = Bulk_long %>% 
                group_by(Element) %>% #group by facet variable
                summarise(y.min = pretty(Mass)[1],
                          y.max = pretty(Mass)[length(pretty(Mass))]) %>%
@@ -123,117 +211,36 @@ elem.plot1<-elem.plot+
                                               to = x[2], 
                                               length.out = 3), 
                      expand = c(0, 0))
-  elem.plot1
-ggsave("Elementplots.tiff", plot = elem.plot1, width=8, height= 10.5, units= "in", dpi =300)
-
-attach(micro_long)
-library(ggthemes)
-
-################
-#lMANOVA on ILRs
-setwd("~/Shell/Micronutrients")
-ILR<-read.csv(file="Shell_ILR.csv", header = TRUE, sep = ",", row.names = c())
-head(ILR)
-
-#create a factor for species names, use attach to call by name
-ILR$Spp<-factor(ILR$Spp, levels=c("A.plicata","C.asperata", "T.verrucosa","F.cerina", "P.decisum", "O.unicolor", "L.ornata", order=TRUE))
-ILR$Strategy<-factor(ILR$Strategy, levels=c("Equilibrium","Periodic",  order=TRUE))
-ILR$Shell<-factor(ILR$Shell, levels=c("U2D2","Generalized", "Unsculptured", order=TRUE))
-
-
-# MANOVA test
-ILR.man <- manova(cbind(BulkTraceILR1, BulkILR1,BulkILR2,TraceILR2, CN, CP, NP) ~ Spp, data = ILR)
-summary.aov(ILR.man)
-library(car)
-library(emmeans)
-#ANOVA for Traditional Stoichiometry ILRs
-#Shell CN
-CNSpp<-lm(CN~Spp, data = ILR)
-emmeans(CNSpp, list(pairwise~Spp), adjust ="Tukey")
-
-CNTribe<-lm(CN~Tribe, data = ILR)
-emmeans(CNTribe, list(pairwise~Tribe), adjust ="Tukey")
-
-CNStrat<-lm(CN~Strategy, data = ILR)
-emmeans(CNStrat, list(pairwise~Strategy), adjust ="Tukey")
-
-CNShell<-lm(CN~Shell, data = ILR)
-emmeans(CNShell, list(pairwise~Shell), adjust ="Tukey")
-#############
-#Shel CP
-CPSpp<-lm(CP~Spp, data = ILR)
-emmeans(CPSpp, list(pairwise~Spp), adjust ="Tukey")
-
-CPTribe<-lm(CP~Tribe, data = ILR)
-emmeans(CPTribe, list(pairwise~Tribe), adjust ="Tukey")
-
-CPShell<-lm(CP~Shell, data = ILR)
-emmeans(CPShell, list(pairwise~Shell), adjust ="Tukey")
-############
-#Shell NP
-NPSpp<-lm(NP~Spp, data = ILR)
-emmeans(NPSpp, list(pairwise~Spp), adjust ="Tukey")
-
-NPTribe<-lm(NP~Tribe, data = ILR)
-emmeans(NPTribe, list(pairwise~Tribe), adjust ="Tukey")
-
-NPShell<-lm(NP~Shell, data = ILR)
-emmeans(NPShell, list(pairwise~Shell), adjust ="Tukey")
-
-#ANOVA for individual Bulk ILR
-BulkTrace1<-lm(BulkTraceILR1~Tribe, data = ILR)
-emmeans(BulkTrace1, list(pairwise~Tribe), adjust ="Tukey")
-
-Bulk1<-lm(BulkILR1~Spp, data = ILR)
-emmeans(Bulk1, list(pairwise~Spp), adjust ="Tukey")
-
-Bulk2Spp<-lm(BulkILR2~Spp, data = ILR)
-emmeans(Bulk2Spp, list(pairwise~Spp), adjust ="Tukey")
-
-Bulk2tribe<-lm(BulkILR2~Tribe, data = ILR)
-emmeans(Bulk2tribe, list(pairwise~Tribe), adjust ="Tukey")
-
-Bulk2shell<-lm(BulkILR2~Shell, data = ILR)
-emmeans(Bulk2shell, list(pairwise~Shell), adjust ="Tukey")
-#ANOVA for individual Trace ILR
-Trace2Spp<-lm(TraceILR2~Spp, data = ILR)
-emmeans(Trace2Spp, list(pairwise~Spp), adjust ="Tukey")
-
-Trace2tribe<-lm(TraceILR2~Tribe, data = ILR)
-emmeans(Trace2tribe, list(pairwise~Tribe), adjust ="Tukey")
+  elem.bulk1
+ggsave("Bulkplots.tiff", plot = elem.bulk1, width=8, height= 10.5, units= "in", dpi =300)
 
 
 
-##############################
-
-#ILR balance value plots
 library(tidyr)
-library(gghalves)
-ILR_long <- gather(ILR, ilr, values, BulkTraceILR1:NP, factor_key=TRUE)
-ILR_long
-
-attach(ILR_long)
-library(Rmisc)
-library(ggthemes)
-
-ILR.plot<-ggplot()+
-  geom_boxplot(data = ILR_long, aes(x=Spp, y = values, fill = Tribe), width = .25, size = 1)+
-  facet_wrap(~ilr, ncol =1,  strip.position = "right", scales="free_y")+
-  labs(x="", y = "Nutrient Balance Value")+
+Trace_long <- gather(micronutr, Element, Mass, B:Zn, factor_key=TRUE)
+Trace_long
+#create box plot for all elements
+elem.trace<-ggplot()+
+  geom_boxplot(data = Trace_long, aes(x=Spp, y =Mass, fill = Tribe), width = .5, size = 1)+
+  facet_wrap(~Element, ncol =2, nrow = 3, strip.position = "right", scales = "free_y")+
+  ylab(expression(Element~(mg~g^{"-1"})))+
   scale_fill_manual(values =Evpal)+
+  ggtitle("Trace elements")+
   theme_bw()+
-  theme(legend.position = "bottom",
-    axis.text.x = element_text(face = "italic", size = 14, angle = 45, hjust =.75, vjust = .75),
-    axis.title.y = element_text(size = 14))
-
-ILR.plot1<-ILR.plot+
-  geom_point(data = ILR_long %>% 
-               group_by(ilr) %>% #group by facet variable
-               summarise(y.min = pretty(values)[-1],
-                         y.max = pretty(values)[length(pretty(values))]) %>%
-               tidyr::gather(key, value, -ilr), 
-             aes(x = -1, y = value),
-             inherit.aes = TRUE, alpha = 1) +
+  theme(legend.position = "bottom", legend.title = element_blank(), 
+        axis.title = element_blank(),
+        axis.text.y = element_text(size = 11, margin=margin(t=-10)),
+        axis.text.x = element_text(face = "italic", size = 12, angle = 45, hjust =.75, vjust = .75),
+        panel.grid = element_line(color = "grey81"), panel.spacing = unit(.75, "lines"),
+        strip.background = element_rect(fill = "grey96"))
+elem.trace1<-elem.trace+
+  geom_point(data = Trace_long %>% 
+               group_by(Element) %>% #group by facet variable
+               summarise(y.min = pretty(Mass)[1],
+                         y.max = pretty(Mass)[length(pretty(Mass))]) %>%
+               tidyr::gather(key, value, -Element), 
+             aes(x = 1, y = value),
+             inherit.aes = FALSE, alpha = 0) +
   
   # Turn off automatical scale expansion, & manually set scale breaks
   # as an evenly spaced sequence (with the "pretty" values created above
@@ -243,195 +250,181 @@ ILR.plot1<-ILR.plot+
   scale_y_continuous(breaks = function(x) seq(from = x[1], 
                                               to = x[2], 
                                               length.out = 3), 
-                     expand = c(-12, 0))
-ILR.plot1
-ggsave("ILRplots.tiff", plot = ILR.plot, width=6, height= 12, units= "in", dpi =300)
-
-#################################
-ilr.df<-(as.data.frame(ILR[c(6:12)]))
-#Run principle components analysis
-ilr.pca<-prcomp(ilr.df, scale =TRUE)
-ilr.mds<-metaMDS(ilr.df, distance = "mahalanobis")
-library(ggvegan)
-library(ggordiplots)
-gg_ordiplot(ilr.mds, groups = ILR$Spp, scaling = 1, choices = c(1, 2))
-#check eigen values with scree plot
-fviz_eig(ilr.pca)
-eig.val <- get_eigenvalue(ilr.pca)
-eig.val
-screeplot(ilr.pca, bstick = FALSE, type = c("barplot", "lines"),
-          npcs = min(10, length(ilr.pca$sdev)),
-          ptype = "o", bst.col = "red", bst.lty = "solid",
-          xlab = "Component", ylab = "Inertia",
-          main = deparse(substitute(ilr.pca)), legend = bstick)
-
-pca.loadings <- ilr.pca$rotation
-pca.loadings
-#extract PCA scores for axis 1, 2, 3
-res.ind <- get_pca_ind(ilr.pca)
-
-pca.scores <- res.ind$coord
-as.data.frame(pca.scores)
-
-coord.groups <- res.ind$coord %>%
-  as_tibble() %>%
-  select(Dim.1, Dim.2, Dim.3)
+                     expand = c(0, 0))
+elem.trace1
+ggsave("Traceplots.tiff", plot = elem.trace1, width=8, height= 8, units= "in", dpi =300)
 
 
+elem.plot<-plot_grid(elem.bulk1+ theme(legend.position = "none"),
+                     elem.trace1, ncol = 2, align ="h", axis = "b", rel_widths = c(.6,1));elem.plot
+ggsave("Elemplots.pdf", plot = elem.plot, width=10, height= 8, units= "in", dpi =300)
+attach(micro_long)
+library(ggthemes)
 
-#need to do this again because more column headers have been added at this point.
-attach(ILR)
-head(ILR)
-ILR.df<-as.data.frame(ILR)
-#instale national parks palettes to make graph pretty as NP
-#devtools::install_github("katiejolly/nationalparkcolors")
-library(nationalparkcolors)
-RWpal<-park_palette("Redwoods")
-Evpal3<-park_palette("Everglades", c(5:7))
-
-pal<-c(RWpal,Evpal) #colorpaletts
+################
+#lMANOVA on ILRs
 
 
+# MANOVA test
 
-attach(ILR.df)
-ILR.PCplotSpp<- autoplot(ilr.pca, data = ILR.df, fill = 'Spp', shape = 21, size = 6,
-                      loadings = TRUE, loadings.colour = 'grey45', loadings.label = TRUE, loadings.label.size = 5, 
-                      loadings.label.colour = 'black',loadings.labels.hjust= 2, loadings.labels.vjust=1)+
-  stat_conf_ellipse(aes(color = Spp, fill = Spp), alpha = 0.1, size =.0, geom = "polygon")+
-  geom_hline(aes(yintercept=0), linetype="dashed", size=1)+
-  geom_vline(aes(xintercept=0), linetype="dashed", size=1)+
-  scale_color_manual(values = pal)+
-  scale_fill_manual(values = pal)+
-  #guides(color=guide_legend(nrow=2))+
-  theme(legend.position = c(.01,.8), legend.title = element_blank(), legend.text = element_text(face = "italic", size =12), 
-        legend.background = element_blank(),
-        panel.background = element_rect(fill="grey94"));ILR.PCplotSpp
-#adjustments to loading vectors
-ILR.PCplotSpp$layers[[2]]$aes_params$size <- 1
-ILR.PCplotSpp$layers[[2]]$geom_params$arrow$length <- unit(0, units = "points")
-ILR.PCplotSpp
+ILR.man <- manova(cbind(CP, NP, All1, Bulk2,Bulk3, Trace2, Trace3) ~ Spp, data = micronutr)
+summary(ILR.man, test = "Wilks", tol = 0) 
+summary.aov(ILR.man)
+#plot to see how Trace 3 changes with length
 
-ggsave("ShellILRPCSpp.tiff", ILR.PCplotSpp, width=8, height= 8, units = "in", dpi =300)
+ILR.tribe <- manova(cbind(CP, NP, All1, Bulk2, Bulk3,Trace2, Trace3) ~ Tribe, data = micronutr)
+summary(ILR.tribe, test = "Wilks", tol = 0) 
+summary.aov(ILR.tribe)
 
+ILR.morph <- manova(cbind(CP, NP, All1, Bulk2, Bulk3,Trace2, Trace3) ~ Shell, data = micronutr)
+summary(ILR.morph, test = "Wilks", tol = 0) 
+summary.aov(ILR.morph,)
 
+ILR.LH <- manova(cbind(CP, NP, All1, Bulk2,Bulk3, Trace2, Trace3) ~ Strategy, data = micronutr)
+summary(ILR.LH, test = "Wilks", tol = 0) 
+summary.aov(ILR.LH)
+dunn.test(CP, Strategy, method="bonferroni", kw = TRUE)
+dunn.test(Bulk3, Strategy, method="bonferroni", kw = TRUE)
+#==============================================================================================
+#PERMANOVA
+#==============================================================================================
+ILRs<-(as.data.frame(micronutr[23:29]))
+attach(ILRs)
 
-#simple ordinatioN
-
-ILR.PCplotTribe<- autoplot(ilr.pca, data = ILR.df, fill = 'Tribe', shape = 21, size = 6,
-                     loadings = TRUE, loadings.colour = 'grey45', loadings.label = TRUE, loadings.label.size = 5, 
-                     loadings.label.colour = 'black',loadings.labels.hjust= 2, loadings.labels.vjust=1)+
-  stat_conf_ellipse(aes(color = Tribe, fill = Tribe), alpha = 0.1, size =.0, geom = "polygon")+
-  geom_hline(aes(yintercept=0), linetype="dashed", size=1)+
-  geom_vline(aes(xintercept=0), linetype="dashed", size=1)+
-  scale_color_manual(values = Evpal)+
-  scale_fill_manual(values = Evpal)+
-  theme(legend.position = c(.025,.85), legend.title = element_blank(), legend.text = element_text(face = "italic"), 
-        legend.background = element_blank(),
-        panel.background = element_rect(fill="grey94"));ILR.PCplot
-#adjustments to loading vectors
-ILR.PCplotTribe$layers[[2]]$aes_params$size <- 1
-ILR.PCplotTribe$layers[[2]]$geom_params$arrow$length <- unit(0, units = "points")
-ILR.PCplotTribe
-
-ggsave("ShellILRPCTribe.tiff", ILR.PCplotTribe, width=8, height= 8, units = "in", dpi =300)
-
-RWpal3<-park_palette("Redwoods", 3)
-ILR.PCplotShell<- autoplot(ilr.pca, data = ILR.df, fill = 'Shell', shape = 21, size = 6,
-                      loadings = TRUE, loadings.colour = 'grey45', loadings.label = TRUE, loadings.label.size = 5, 
-                      loadings.label.colour = 'black',loadings.labels.hjust= 2, loadings.labels.vjust=1)+
-  stat_conf_ellipse(aes(color = Shell, fill = Shell), alpha = 0.1, size =.0, geom = "polygon")+
-  geom_hline(aes(yintercept=0), linetype="dashed", size=1)+
-  geom_vline(aes(xintercept=0), linetype="dashed", size=1)+
-  scale_color_manual(values = RWpal3)+
-  scale_fill_manual(values = RWpal3)+
-  theme(legend.position = c(.02,.85), legend.title = element_blank(), legend.text = element_text(face = "italic"), 
-        legend.background = element_blank(),
-        panel.background = element_rect(fill="grey94"));ILR.PCplotShell
-#adjustments to loading vectors
-ILR.PCplotShell$layers[[2]]$aes_params$size <- 1
-ILR.PCplotShell$layers[[2]]$geom_params$arrow$length <- unit(0, units = "points")
-ILR.PCplotShell
-
-ggsave("ShellILRPCShell.tiff", ILR.PCShell, width=8, height= 8, units = "in", dpi =300)
-
-#######
-RWpal2<-park_palette("Redwoods")
-
-ILR.PCplotStrat<- autoplot(ilr.pca, data = ILR.df, fill = 'Strategy', shape = 21, size = 6,
-                           loadings = TRUE, loadings.colour = 'grey45', loadings.label = TRUE, loadings.label.size = 5, 
-                           loadings.label.colour = 'black',loadings.labels.hjust= 2, loadings.labels.vjust=1)+
-  stat_conf_ellipse(aes(color = Strategy, fill = Strategy), alpha = 0.1, size =.0, geom = "polygon")+
-  geom_hline(aes(yintercept=0), linetype="dashed", size=1)+
-  geom_vline(aes(xintercept=0), linetype="dashed", size=1)+
-  scale_color_manual(values = RWpal2, c(5,6))+
-  scale_fill_manual(values = RWpal2, c(5,6))+
-  theme(legend.position = c(.05,.85), legend.title = element_blank(), legend.text = element_text(face = "italic"), 
-        legend.background = element_blank(),
-        panel.background = element_rect(fill="grey94"));ILR.PCplotStrat
-#adjustments to loading vectors
-ILR.PCplotStrat$layers[[2]]$aes_params$size <- 1
-ILR.PCplotStrat$layers[[2]]$geom_params$arrow$length <- unit(0, units = "points")
-ILR.PCplotStrat
-
-ggsave("ShellILRPCStrat.tiff", ILR.PCplotStrat, width=8, height= 8, units = "in", dpi =300)
-
-ILR.PCplot<-plot_grid(ILR.PCplotSpp, ILR.PCplotTribe, ILR.PCplotShell, ILR.PCplotStrat, nrow = 2, ncol = 2, labels = "AUTO", align = "vh", rel_heights = c(1, 1, 1,1));ILR.PCplot
-ILR.PCplot
-save_plot("ILRFigure.tiff", ILR.PCplot, base_width = 10, base_height =10, dpi =300)
+#PERMANOVA morphology differences
+set.seed(1)
+adonis(ILRs~Shell, data=micronutr, permutations = 999, method = "bray",
+       strata = NULL, contr.unordered= "contr.sum",
+       contr.ordered = "contr.poly")
+#BC distance matrix prep step to test for dispersion among species
+bc_ILRs<-vegdist(ILRs, method = "bray")
+#test for dispersion among groups
+disper_ILR_shell<-betadisper(bc_ILRs, Shell, type = "centroid")
+anova(disper_ILR_shell)
+#PERMANOVA lh strategydifferences
+set.seed(1)
+adonis(ILRs~Strategy, data=micronutr, permutations = 999, method = "bray",
+       strata = NULL, contr.unordered= "contr.sum",
+       contr.ordered = "contr.poly")
+#BC distance matrix prep step to test for dispersion among species
+bc_ILRs<-vegdist(ILRs, method = "bray")
+#test for dispersion among groups
+disper_ILR_strategy<-betadisper(bc_ILRs, Strategy, type = "centroid")
+anova(disper_ILR_strategy)
 
 
-library(MASS)
-fit<-lda(Spp~C + N + P + K + B + Zn + Fe + Cu + Ca + Mn, data = micronutr)
-fit
-ct <- table(micronutr$Spp, fit$class)
-sum(diag(prop.table(ct)))
-plot(fit)
-lda.values <- predict(fit)
-newdata <- data.frame(type = micronutr[,1], lda = lda.values$x)
-ggplot(newdata) + geom_point(aes(lda.LD1, lda.LD2, colour = type), size = 2.5)
-library(caret)
-training.samples <- micronutr$Spp%>%
-  createDataPartition(p = 0.8, list = FALSE)
-train.data <- micronutr[training.samples, ]
-test.data <- micronutr[-training.samples, ]
-# Estimate preprocessing parameters
-preproc.param <- train.data %>% 
-  preProcess(method = c("center", "scale"))
-# Transform the data using the estimated parameters
-train.transformed <- preproc.param %>% predict(train.data)
-test.transformed <- preproc.param %>% predict(test.data)
-library(MASS)
-# Fit the model
-model <- lda(Spp~C + N + P + K + B + Zn + Fe + Cu + Ca + Mn, data = train.transformed)
-# Make predictions
-predictions <- model %>% predict(test.transformed)
-# Model accuracy
-mean(predictions$class==test.transformed$Spp)
+library(Rmisc)
+SummP<-summarySE(data = micronutr, measurevar = "P", groupvars = "Spp");attach(SummP)
+SummCP<-summarySE(data = micronutr, measurevar = "CP", groupvars = "Spp");attach(SummCP)
+SummGR<-summarySE(data = micronutr, measurevar = "GR", groupvars = "Spp");attach(SummGR)
+SummP$GR<-SummGR$GR
+SummCP$P<-SummP$P
+SummCP$GR<-SummGR$GR
 
-model
-plot(model)
-lda.data <- cbind(train.transformed, predict(model)$x)
+SummP.nolorn<-subset(SummP, Spp != "L.ornata");attach(SummP.nolorn)
 
-ggord(model, lda.data$Spp, size = 0, ellipse= FALSE, arrow = 0, veccol = "grey 40",
-      vectyp = "solid", veclsz = 1, ext = 2.2, txt=8)+
-  geom_hline(aes(yintercept=0), linetype="dashed", size=1)+
-  geom_vline(aes(xintercept=0), linetype="dashed", size=1)+
-  stat_conf_ellipse(aes(colour = lda.data$Spp, fill = lda.data$Spp), alpha = 0.07, size =1, geom = "polygon")+
-  geom_point(aes(fill = lda.data$Spp), shape = 21, size = 6, alpha = .7)+
-  scale_color_manual(values = pal, c(5,6))+
-  scale_fill_manual(values = pal, c(5,6))+
-  theme(legend.position = c(.8,.2), legend.title = element_blank(), legend.text = element_text(face = "italic"), legend.background = element_blank(),
-        panel.background = element_rect(fill="grey94"), panel.grid = element_line(color = "grey76"),
-        axis.text = element_text(size =12), axis.title = element_text(size = 14))
+ShellPPlot1<-ggplot(data=SummP)+
+  geom_smooth(aes(x=GR, y=P), formula = y~x, size = .75, method = "lm", se = FALSE, color = "black")+
+  geom_smooth(data = SummP.nolorn, aes(x=GR, y=P), formula = y~x, size = .75, method = "lm", se = FALSE,lty=2, color = "grey40")+
+  geom_point(aes(x=GR, y=P, fill = Spp, shape =Spp), color = "black", size = 3.5)+
+  geom_errorbar(aes(x=GR, ymin=P-(2*se), ymax=P+(2*se)), width=0, size= .65, color="grey45") + 
+  scale_y_continuous(limits = c(0, .4))+
+  xlab("Growth Rate (k)")+
+  ylab(expression("P (mg " ~ g^-1 *")"))+
+  scale_fill_manual(values = c( "#769370", "#BDB2A7", "#F1C646", "#6E687E", "#F17236", "#91D5DE", "#2E8289"), name = "Spp", 
+                    breaks = c("A.plicata","C.asperata", "T.verrucosa","F.cerina", "P.decisum", "L.ornata", "O.unicolor", order = TRUE))+
+  scale_shape_manual(values = c( 21, 22, 23, 24, 25, 21, 22), name = "Spp", 
+                     breaks = c("A.plicata","C.asperata", "T.verrucosa","F.cerina", "P.decisum", "L.ornata", "O.unicolor", order = TRUE))+
+  theme(legend.position = "none", axis.title.x = element_blank(), axis.text.x = element_blank())+
+  annotate("text", x = 0.25, y = .35, label = "R²=0.13\np=0.01", size = 5)
+ShellPPlot1
+lmP<-lm(P~GR, data= micronutr)
+summary(lmP)
+#subset without L.ornata
+micronutr.nolorn<-subset(micronutr, Spp != "L.ornata");attach(micronutr.nolorn)
+lmP.nolorn<-lm(P~GR, data= micronutr.nolorn)
+summary(lmP.nolorn)
+##########################################################################
+SummCP.nolorn<-subset(SummCP, Spp != "L.ornata");attach(SummCP.nolorn)
+ShellCPPlot1<-ggplot(data=SummCP)+
+  geom_smooth(aes(x=GR, y=CP), formula = y~x, size = .75, method = "lm", se = FALSE, color = "black")+
+  geom_smooth(data = SummCP.nolorn, aes(x=GR, y=CP), formula = y~x, size = .75, method = "lm", se = FALSE,lty=2, color = "grey40")+
+  geom_point(aes(x=GR, y=CP, fill = Spp, shape = Spp), color = "black", size = 3.5)+
+  geom_errorbar(aes(x=GR, ymin=CP-(2*se), ymax=CP+(2*se)), width=0, size= .65, color="grey45") + 
+  scale_y_continuous(limits = c(1.75, 2))+
+  labs(x = "Growth Rate (k)", y = "[C|P]")+
+  scale_fill_manual(values = c( "#769370", "#BDB2A7", "#F1C646", "#6E687E", "#F17236", "#91D5DE", "#2E8289"), name = "Spp", breaks = c("A.plicata","C.asperata", "T.verrucosa","F.cerina", "P.decisum", "L.ornata", "O.unicolor", order = TRUE))+
+  scale_shape_manual(values = c( 21, 22, 23, 24, 25, 21, 22), name = "Spp", breaks = c("A.plicata","C.asperata", "T.verrucosa","F.cerina", "P.decisum", "L.ornata", "O.unicolor", order = TRUE))+
+  theme(legend.position = "none", axis.title.x = element_blank(), axis.text.x = element_blank())+
+  annotate("text", x = 0.25, y = 1.95, label = "R²=0.20\np=0.003", size = 5)
+ShellCPPlot1
 
-ggplot(lda.data, aes(LD1, LD2)) +
-  geom_point(aes(fill = Spp), shape = 21, size = 6)+
-  stat_conf_ellipse(aes(color = Spp, fill = Spp), alpha = 0.07, size =.25, geom = "polygon")+
-  geom_hline(aes(yintercept=0), linetype="dashed", size=1)+
-  geom_vline(aes(xintercept=0), linetype="dashed", size=1)+
-  scale_color_manual(values = pal)+
-  scale_fill_manual(values = pal)+
-  theme(legend.position = c(.8,.15), legend.title = element_blank(), legend.text = element_text(face = "italic"), 
-        legend.background = element_rect(linetype = 2, color="black", fill = "grey94"),
-        panel.background = element_rect(fill="grey96"))
+
+SummBulk3<-summarySE(data = micronutr, measurevar = "Bulk3", groupvars = "Spp")
+SummCP$Bulk3<-SummBulk3$Bulk3
+attach(SummCP)
+ShellBulk3Plot1<-ggplot(data=SummCP)+
+  geom_smooth(aes(x=GR, y=Bulk3), formula = y~x, size = .75, method = "lm", se = FALSE, color = "black")+
+  geom_smooth(data = SummCP.nolorn, aes(x=GR, y=Bulk3), formula = y~x, size = .75, method = "lm", se = FALSE,lty=2, color = "grey40")+
+  geom_point(aes(x=GR, y=Bulk3, fill = Spp, shape=Spp), color = "black", size = 3.5)+
+  geom_errorbar(aes(x=GR, ymin=Bulk3-(2*se), ymax=Bulk3+(2*se)), width=0, size= .65, color="grey45") + 
+  scale_y_continuous(limits = c(11, 12.5))+
+  labs(x = "Growth Rate (k)", y = "[C,Ca|P]")+
+  scale_fill_manual(values = c( "#769370", "#BDB2A7", "#F1C646", "#6E687E", "#F17236", "#91D5DE", "#2E8289"), name = "Spp", breaks = c("A.plicata","C.asperata", "T.verrucosa","F.cerina", "P.decisum", "L.ornata", "O.unicolor", order = TRUE))+
+  scale_shape_manual(values = c( 21, 22, 23, 24, 25, 21, 22), name = "Spp", breaks = c("A.plicata","C.asperata", "T.verrucosa","F.cerina", "P.decisum", "L.ornata", "O.unicolor", order = TRUE))+
+    theme(legend.position = c(0.72, .25), legend.title = element_blank(), 
+        legend.text = element_text(face= "italic", size =10))+
+  annotate("text", x = 0.25, y = 12.2, label = "R²=0.21\np=0.002", size = 5)
+ShellBulk3Plot1
+
+GR.plot1<-plot_grid(ShellPPlot1,ShellCPPlot1,ShellBulk3Plot1, nrow = 3, align ="v", axis = "l", rel_heights = c(.9,.9, 1.1), labels = c("A","B", "C"));GR.plot1
+ggsave("GRplots.tiff", plot = GR.plot1, width=5, height= 10, units= "in", dpi =300)
+
+lmNP<-lm(NP~GR, data= micronutr)
+summary(lmNP)
+
+lmCP<-lm(CP~Spp, data= micronutr)
+summary(lmCP)
+emmeans(lmCP, list(pairwise~Spp), adjust = "Tukey")
+
+lmCP.nolorn<-lm(CP~GR, data= micronutr.nolorn)
+summary(lmCP.nolorn)
+
+
+ShellCPPlot<-ggplot(data=micronutr)+
+  geom_smooth(aes(x=GR, y=CP), formula = y~x, size = 1.5, method = "lm", se = TRUE, color = "black")+
+  geom_point(aes(x=GR, y=CP, fill = Spp), shape = 21, color = "black", size = 5)+
+  scale_y_continuous(limits = c(1.7, 2))+
+  labs(x = "Growth Rate (k)", y = "[C|P]")+
+  scale_fill_manual(values = c( "#769370", "#BDB2A7", "#F1C646", "#6E687E", "#F17236", "#91D5DE", "#2E8289"), name = "Spp", breaks = c("A.plicata","C.asperata", "T.verrucosa","F.cerina", "P.decisum", "L.ornata", "O.unicolor", order = TRUE))+
+  theme(legend.position = "none", axis.title.x = element_blank(), axis.text.x = element_blank())+
+  annotate("text", x = 0.25, y = 1.75, label = "R²=0.20\np=0.003", size = 5)
+
+ShellCPPlot
+
+
+
+ShellBulk3Plot<-ggplot(data=micronutr)+
+  geom_smooth(aes(x=GR, y=Bulk3), formula = y~x, size = 1.5, method = "lm", se = TRUE, color = "black")+
+  geom_point(aes(x=GR, y=Bulk3, fill = Spp), shape = 21, color = "black", size = 5)+
+  labs(x = "Growth Rate (k)", y = "[C,Ca|P]")+
+  scale_fill_manual(values = c( "#769370", "#BDB2A7", "#F1C646", "#6E687E", "#F17236", "#91D5DE", "#2E8289"), name = "Spp", breaks = c("A.plicata","C.asperata", "T.verrucosa","F.cerina", "P.decisum", "L.ornata", "O.unicolor", order = TRUE))+
+  theme(legend.position = c(0.75, .2), legend.title = element_blank(), legend.text = element_text(face= "italic"))+
+  annotate("text", x = 0.25, y = 11, label = "R²=0.21\np=0.002", size = 5)
+
+ShellBulk3Plot
+
+GR.plot1<-plot_grid(ShellCPPlot,ShellBulk3Plot, nrow = 2, align ="v", axis = "l", rel_heights = c(1,1), labels = c("A","B"));GR.plot
+ggsave("GRplots.tiff", plot = GR.plot, width=6, height= 10, units= "in", dpi =300)
+
+lmBulk3<-lm(Bulk3~Spp, data = micronutr)
+summary(lmBulk3)
+
+lmB3<-lm(Bulk3~Spp, data= micronutr)
+emmeans(lmBulk3, list(pairwise~Spp), adjust = "Tukey")
+
+
+
+
+
 
