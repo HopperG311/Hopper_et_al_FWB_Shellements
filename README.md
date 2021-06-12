@@ -1,4 +1,4 @@
-# Shell_ionomics
+# Associations among elements in freshwater mussel shells (Unionidae) and their relation to morphology and life history 
 Data, isometric log ration calculations, and code for analysis of shell ionomics data set. Import data set and run principle components analysis (PCA) to identify linearly independent ratios among nutrients called sequential binary partition.
 Excel spread sheet for calculations of ILRs. 
 
